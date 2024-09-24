@@ -1,0 +1,622 @@
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.15.1/dist/phaser-arcade-physics.min.js"></script>
+<script>
+
+const simConfig = {
+    width: 600,
+    height: 500,
+    numberOfParticles: 135,
+    stateOfMatter: 'gas',
+    previousState: 'gas',
+    changingState: false,
+    //ceilingSpeed: 3,
+    //gasCeilingSpeed: 50,
+    changeOfStateProportions: {   
+        'gas_liquid': 1,
+        'gas_solid': 1,
+        'liquid_solid': 1,
+        'liquid_gas': 1,
+        'solid_gas': 1,
+        'solid_liquid': 1
+    },
+    changeOfStateCeilingDirection: {   
+        'gas_liquid': 'down',
+        'gas_solid': 'down',
+        'liquid_solid': 'down',
+        'liquid_gas': 'up',
+        'solid_gas': 'up',
+        'solid_liquid': 'up'
+    },
+    stateChangeText: {
+        'gas_liquid': 'Gas to Liquid - Condensation',
+        'gas_solid': 'Gas to Solid - Deposition',
+        'liquid_solid': 'Liquid to Solid - Freezing',
+        'liquid_gas': 'Liquid to Gas - Vaporization',
+        'solid_gas': 'Solid to Gas - Sublimation',
+        'solid_liquid': 'Solid to Liquid - Melting'
+    },
+    stateDescriptionText: {
+        'gas': 'Gas - fast particles, no bonds',
+        'liquid': 'Liquid - particles move about, weak bonds',
+        'solid': 'Solid - particles vibrate, strong bonds'
+    },
+    changeOfStateCeilingSpeed: {   
+        'gas_liquid': 2,
+        'gas_solid': 2,
+        'liquid_solid': 1,
+        'liquid_gas': 50,
+        'solid_gas': 50,
+        'solid_liquid': 3
+    },
+    gravity: {
+        'gas_liquid': 0.02,
+        'gas_solid': 0.02,
+        'liquid_solid': 0,
+        'liquid_gas': 0,
+        'solid_gas': 0,
+        'solid_liquid': 0
+    },
+    changeOfState: 'gas_liquid',
+    interactionDistance: {
+        solid: 22,
+        liquid: 18,
+        gas: 18
+    },
+    velocity: {
+        solid: 0.1,
+        liquid: 1,
+        gas: 5
+    },
+    ceiling: {
+        solid: 380, // Adjust the solid ceiling as needed
+        liquid: 380, // Adjust the liquid ceiling as needed
+        gas: 0 // Adjust the gas ceiling as needed
+    },
+    bondDistance: {
+        solid: 33,
+        liquid: 29,
+        gas: 0
+    },
+    colors: {
+        solid: 0x40E0D0, // Turquoise
+        liquid: 0xf39c12,  // Orange
+        gas: 0xe74c3c  // Alizarin Crimson
+    },
+    running: true
+}
+
+let currentProperties = {};
+
+var config = {
+    width: 800,
+    height: 550,
+    type: Phaser.WEBGL,
+    scene: {
+        create: initialise,
+        update: update
+    },
+    backgroundColor: '#ffffff'
+};
+
+
+
+new Phaser.Game(config);
+
+
+class Particles {
+
+    constructor(context, phaser) {
+        this.context = context; // set the context
+        this.phaser = phaser; // work if Phaser is called something different
+        this.textureCreator = context.make.graphics({x: 0, y: 0, add: false});
+        this.bondGraphics = context.add.graphics().setDepth(1);
+        this.textures = []; // array of textures
+        this.currentTexture = null;
+        this.particleSprites = [];
+        this.stateChangeLabel = null; // Initialize stateChangeLabel
+    }
+
+    makeTexture(tname, textureKey, clear = true) {
+        // make texture from whatever has been drawn, with the name tname
+        if (clear) {
+            this.textureCreator.clear(); // clear the texture if needed
+        }
+
+        // draw the predefined texture based on the given key
+        switch (textureKey) {
+            case 'particle':
+                this.drawPredefinedTexture('particle');
+                break;
+            case 'standoutParticle':
+                this.drawPredefinedTexture('standoutParticle');
+                break;
+            // Add more cases as needed
+        }
+
+        this.textureCreator.generateTexture(tname, 400, 400);
+        this.currentTexture = tname; // set the current texture
+        this.textures.push(this.currentTexture);
+    }
+
+    drawPredefinedTexture(texture) {
+        switch(texture) { // check texture name
+            case 'particle':
+                this.textureCreator.lineStyle(2, 0x000000, 1.0);
+                this.textureCreator.strokeCircle(200, 200, 10); // black outline, adjust radius as needed
+                this.textureCreator.fillStyle(0x00FFFF, 1.0);
+                this.textureCreator.fillCircle(200, 200, 10); // blue circle, adjust radius as needed
+                this.textureCreator.fillStyle(0xFFFFFF, 1.0);
+                this.textureCreator.fillCircle(200 - 3, 200 - 3, 4); // smaller white circle, adjust radius and position as needed
+                break;
+            case 'standoutParticle':
+                this.textureCreator.lineStyle(2, 0x000000, 1.0);
+                this.textureCreator.strokeCircle(200, 200, 10); // black outline, adjust radius as needed
+                this.textureCreator.fillStyle(0xFF0000, 1.0);
+                this.textureCreator.fillCircle(200, 200, 10); // red circle, adjust radius as needed
+                this.textureCreator.fillStyle(0xFFFFFF, 1.0);
+                this.textureCreator.fillCircle(200 - 3, 200 - 3, 4); // smaller white circle, adjust radius and position as needed
+                break;
+        } 
+    }
+
+    // Function to generate a random number with a normal distribution
+    generateNormalRandom(mean, standardDeviation) {
+        let u1 = 0, u2 = 0;
+        while (u1 === 0) u1 = Math.random(); // Converting [0,1) to (0,1)
+        while (u2 === 0) u2 = Math.random();
+        const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        return z0 * standardDeviation + mean;
+    }
+
+    initialiseState(state = 'gas'){
+        // Use simConfig to set interaction distance, velocity, and ceiling based on the provided state
+        simConfig.stateOfMatter = state;
+
+        currentProperties.interactionDistance = simConfig.interactionDistance[state];
+        currentProperties.velocity = simConfig.velocity[state];
+        currentProperties.ceiling = simConfig.ceiling[state];
+
+        this.populateParticles();
+    }
+
+    changeToNewStateVelocity(){
+        // For each particle, change the xVelocity and yVelocity to the final velocity for the end state
+        for (let i = 0; i < simConfig.numberOfParticles; i++) {
+            const particleSprite = this.particleSprites[i];
+
+            const finalVelocityX = particleSprite.getData(`${simConfig.stateOfMatter}FinalVelocityX`);
+            const finalVelocityY = particleSprite.getData(`${simConfig.stateOfMatter}FinalVelocityY`);
+
+            particleSprite.setData({
+                xVelocity: finalVelocityX,
+                yVelocity: finalVelocityY,
+            });
+        }        
+    }
+
+    changeState() {
+
+        const ceilingSpeed = simConfig.changeOfStateCeilingSpeed[simConfig.changeOfState];
+        const ceilingDirection = simConfig.changeOfStateCeilingDirection[simConfig.changeOfState];
+        const particleAcceleration = simConfig.gravity[simConfig.changeOfState];
+        const intendedCeiling = simConfig.ceiling[simConfig.stateOfMatter];
+
+        // Apply acceleration to every particle's y velocity
+        this.particleSprites.forEach((particleSprite) => {
+            const yVelocity = particleSprite.getData('yVelocity');
+            const newVelocity = yVelocity + particleAcceleration;
+            particleSprite.setData('yVelocity', newVelocity);
+        });
+
+        // Move the ceiling down at the specified speed
+        if (ceilingDirection === 'down') {
+            currentProperties.ceiling += ceilingSpeed;
+        } else {
+            // If moving up, subtract the speed
+            currentProperties.ceiling -= ceilingSpeed;
+        }
+
+        // Check if the ceiling has moved past its intended position
+
+        if ((ceilingDirection === 'down' && currentProperties.ceiling > intendedCeiling) ||
+            (ceilingDirection === 'up' && currentProperties.ceiling < intendedCeiling)) {
+            currentProperties.ceiling = intendedCeiling;
+
+            // For each particle, set the xVelocity and yVelocity to the final velocity for the end state
+            for (let i = 0; i < simConfig.numberOfParticles; i++) {
+                const particleSprite = this.particleSprites[i];
+                const endState = simConfig.stateOfMatter;
+
+                const finalVelocityX = particleSprite.getData(`${endState}FinalVelocityX`);
+                const finalVelocityY = particleSprite.getData(`${endState}FinalVelocityY`);
+
+                particleSprite.setData({
+                    xVelocity: finalVelocityX,
+                    yVelocity: finalVelocityY,
+                });
+            }
+
+            // The state change is complete
+            simConfig.changingState = false;
+        }
+
+    }
+
+    formatStateChangeText = () => {
+        // Retrieve the state change text from the config
+        const stateChangeText = simConfig.stateChangeText[simConfig.changeOfState];
+        const stateDescriptionText = simConfig.stateDescriptionText[simConfig.stateOfMatter];
+
+        // Check if there is an existing text and destroy it
+        if (this.stateChangeLabel) {
+            this.stateChangeLabel.destroy();
+        }
+
+        // Create a text game object using this.context
+        this.stateChangeLabel = this.context.add.text(simConfig.width / 2, 30, stateChangeText, {
+            font: 'bold 24px Arial',
+            fill: '#ffffff',
+        }).setOrigin(0.5); // Set the origin to the center
+
+        // Set the depth to bring the text to layer 5
+        this.stateChangeLabel.setDepth(5);
+
+        // Clear existing timer if any
+        if (this.stateChangeTimer) {
+            this.stateChangeTimer.remove();
+        }
+
+        // Set a timer to remove the text after 5 seconds
+        this.stateChangeTimer = this.context.time.delayedCall(4000, () => {
+            this.stateChangeLabel.destroy(); // Remove the text
+
+            // Format the state description
+            this.stateChangeLabel = this.context.add.text(simConfig.width / 2, 30, stateDescriptionText, {
+                font: 'bold 24px Arial',
+                fill: '#ffffff',
+            }).setOrigin(0.5); // Set the origin to the center
+        });
+    }
+
+    instantiateParticles() {
+        // Draw and generate the particle texture
+        this.drawPredefinedTexture('particle');
+        this.drawPredefinedTexture('standoutParticle'); // Draw the standout particle texture
+
+        for (let i = 0; i < simConfig.numberOfParticles; i++) {
+            const textureKey = i === 0 ? 'standoutParticle' : 'particle'; // Use 'standoutParticle' for the first particle, 'particle' for the rest
+            this.makeTexture(`particle${i}`, textureKey);
+
+            const particleSprite = this.context.add.sprite(-100, -100, `particle${i}`);
+            this.particleSprites.push(particleSprite);
+        }
+    }
+
+    populateParticles() {
+        for (let i = 0; i < simConfig.numberOfParticles; i++) {
+            // Use the existing particle sprite from the array
+            const particleSprite = this.particleSprites[i];
+
+            const particleX = Phaser.Math.FloatBetween(0, simConfig.width);
+            const particleY = Phaser.Math.FloatBetween(currentProperties.ceiling, simConfig.height);
+
+            // Generate random x and y velocities with a normal distribution
+            const xVelocity = this.generateNormalRandom(0, 1) * currentProperties.velocity;
+            const yVelocity = this.generateNormalRandom(0, 1) * currentProperties.velocity;
+
+            // Set xVelocity and yVelocity once for each particle
+            particleSprite.setData({
+                xVelocity,
+                yVelocity,
+            });
+
+            // Iterate over the state change pairs and calculate increments
+            for (const change of Object.keys(simConfig.changeOfStateProportions)) {
+                const [startState, endState] = change.split('_');
+
+                // Calculate 'final' velocity values and store in particle data
+                particleSprite.setData({
+                    [`${endState}FinalVelocityX`]: xVelocity * simConfig.velocity[endState] / simConfig.velocity['gas'],
+                    [`${endState}FinalVelocityY`]: yVelocity * simConfig.velocity[endState] / simConfig.velocity['gas'],
+                });
+            }
+
+            particleSprite.setPosition(particleX, particleY);
+
+        }
+    }
+
+    moveParticles() {
+        this.particleSprites.forEach((particleSprite) => {
+            if (particleSprite.getData('xVelocity') !== undefined && particleSprite.getData('yVelocity') !== undefined) {
+
+                // Get current position and velocities
+                let x = particleSprite.x;
+                let y = particleSprite.y;
+                let xVelocity = particleSprite.getData('xVelocity');
+                let yVelocity = particleSprite.getData('yVelocity');
+
+                const borderInsert = 10; // So the particles bounce off the edge of the box and don't overlap it
+
+                // Update position based on velocities
+                x += xVelocity;
+                y += yVelocity;
+
+                // Check for wall collisions and adjust positions accordingly
+                if (x < 0 + borderInsert) {
+                    x = 0 + borderInsert;
+                    xVelocity = Math.abs(xVelocity); // Bounce off left wall
+                } else if (x > simConfig.width - borderInsert) {
+                    x = simConfig.width - borderInsert;
+                    xVelocity = -Math.abs(xVelocity); // Bounce off right wall
+                }
+
+                if (y < currentProperties.ceiling + borderInsert) {
+                    y = currentProperties.ceiling + borderInsert;
+                    yVelocity = Math.abs(yVelocity); // Bounce off ceiling
+                } else if (y > simConfig.height - borderInsert) {
+                    y = simConfig.height - borderInsert;
+                    yVelocity = -Math.abs(yVelocity); // Bounce off bottom
+                }
+
+                this.particleSprites.forEach((otherParticle) => {
+                    if (otherParticle !== particleSprite) {
+                        // Calculate distance between particle centers
+                        const distance = Phaser.Math.Distance.Between(
+                            particleSprite.x,
+                            particleSprite.y,
+                            otherParticle.x,
+                            otherParticle.y
+                        );
+
+                        // Set an interaction distance threshold
+                        const interactionDistance = simConfig.interactionDistance[simConfig.stateOfMatter];
+
+                        if (distance < interactionDistance) { //particles collide so swap all their properties
+                            // Swap velocities
+                            const tempXVelocity = xVelocity;
+                            const tempYVelocity = yVelocity;
+
+                            xVelocity = otherParticle.getData('xVelocity');
+                            yVelocity = otherParticle.getData('yVelocity');
+
+                            otherParticle.setData('xVelocity', tempXVelocity);
+                            otherParticle.setData('yVelocity', tempYVelocity);
+
+                            const angle = Math.atan2(y - otherParticle.y, x - otherParticle.x);
+                            const overlap = interactionDistance - distance + 1;
+                            x += overlap * Math.cos(angle);
+                            y += overlap * Math.sin(angle);
+                        }
+
+                        const bondDistance = simConfig.bondDistance[simConfig.stateOfMatter];
+
+                        if (distance < bondDistance) {
+                            // Calculate direction vector between particle centers
+                            const direction = new Phaser.Math.Vector2(otherParticle.x - particleSprite.x, otherParticle.y - particleSprite.y).normalize();
+
+                            const bondCentreDisplacement = 7;
+
+                            // Calculate starting and ending points for the bond line
+                            const startX = particleSprite.x + direction.x * bondCentreDisplacement;
+                            const startY = particleSprite.y + direction.y * bondCentreDisplacement;
+                            const endX = otherParticle.x - direction.x * bondCentreDisplacement;
+                            const endY = otherParticle.y - direction.y * bondCentreDisplacement;
+
+                            // Draw a line between particles with reduced length
+                            this.bondGraphics.lineStyle(4, 0xFFFF00); // Yellow color, 4 pixels thick
+                            this.bondGraphics.lineBetween(startX, startY, endX, endY);
+                        }
+                    }
+                });
+
+                // Update sprite position and velocities
+                particleSprite.setPosition(x, y);
+                particleSprite.setData('xVelocity', xVelocity);
+                particleSprite.setData('yVelocity', yVelocity);
+
+            }
+        });
+    }
+}
+
+var particlesHolder;
+
+function initialise()
+{
+    
+    // Create a black background square
+    const backgroundSquare = this.add.rectangle(
+        simConfig.width / 2,  // X coordinate at the center
+        simConfig.height / 2, // Y coordinate at the center
+        simConfig.width,      // Width based on simConfig
+        simConfig.height,     // Height based on simConfig
+        0x000000              // Black color
+    );
+
+    // Set origin to the center
+    backgroundSquare.setOrigin(0.5);
+
+    // Send the background to the back so particles are on top
+    this.children.sendToBack(backgroundSquare);
+
+    particlesHolder = new Particles(this, Phaser);
+    particlesHolder.instantiateParticles();
+    particlesHolder.initialiseState('gas');
+
+    var ui = new UI(this);
+
+    // Create radio buttons using simConfig
+    const stateRadioButtons = ui.createStateRadioButtons(650, 30, (selectedState) => {
+        simConfig.previousState = simConfig.stateOfMatter;
+        simConfig.stateOfMatter = selectedState;
+        
+        if (simConfig.previousState !== simConfig.stateOfMatter) {
+            simConfig.changeOfState = `${simConfig.previousState}_${simConfig.stateOfMatter}`;
+            particlesHolder.changeToNewStateVelocity();
+            particlesHolder.formatStateChangeText();
+        }
+
+        simConfig.changingState = true;
+    });
+}
+
+
+function update(){
+    if (simConfig.running) {
+        particlesHolder.bondGraphics.clear();
+        particlesHolder.moveParticles();
+
+        if (simConfig.changingState) {
+            particlesHolder.changeState();
+        }
+    }
+}
+
+
+class UI {
+
+    constructor(scene){
+        this.scene = scene;
+        this.elements = {};
+        this.checkboxCallbacks = {}; // Initialize checkboxCallbacks
+        this.isChecked = false; // Initialize isChecked for checkboxes
+    }
+
+    createButton(name, x, y, buttonText, callback) {
+        const rectPadding = 0;
+        const rectWidth = 80; // Set your desired width
+        const rectHeight = 30; // Set your desired height
+
+        // Create a rectangle
+        const rect = this.scene.add.rectangle(x, y, rectWidth, rectHeight, 0xffffff)
+            .setOrigin(0.5, 0.5)
+            .setStrokeStyle(2, 0x888888);
+
+        // Create a text element
+        const text = this.scene.add.text(x, y, buttonText, { font: '12px Arial', fill: '#000000' })
+            .setOrigin(0.5, 0.5);
+
+        // Make both rectangle and text interactive
+        rect.setInteractive({ useHandCursor: true });
+        text.setInteractive({ useHandCursor: true });
+
+        // Set up click event
+        rect.on('pointerdown', callback);
+        text.on('pointerdown', callback);
+
+        // Store the elements in the elements object
+        this.elements[name] = { rect, text };
+
+        return { rect, text };
+    }
+                
+    createStateRadioButtons(x, y, callback) {
+
+        const radioGroup = this.scene.add.group();
+        let selectedButton = null;
+
+        const buttonSize = 20;
+        const spacing = 10;
+        const labelYNudge = 0;
+
+        // Add title above the radio buttons
+        const title = this.scene.add.text(x + 28, y - 20, 'State of Matter', { font: '12px Arial', fill: '#000000' })
+            .setOrigin(0.5, 0.5);
+
+        const states = ['gas', 'liquid', 'solid']; // Define the states explicitly
+
+        for (let i = 0; i < states.length; i++) {
+            const state = states[i];
+
+            // Create a graphics object for the radio button
+            const graphics = this.scene.add.graphics();
+
+            // Draw the unselected state: black border with colored fill
+            graphics.lineStyle(2, 0x000000, 1);
+            graphics.fillStyle(simConfig.colors[state], 1);
+            graphics.fillCircle(x + buttonSize / 2, y + i * (buttonSize + spacing) + buttonSize / 2, buttonSize / 2);
+            graphics.strokeCircle(x + buttonSize / 2, y + i * (buttonSize + spacing) + buttonSize / 2, buttonSize / 2);
+
+            // Draw the selected state: black border with black fill (initially hidden)
+            const selectedCircle = this.scene.add.graphics();
+            selectedCircle.lineStyle(2, 0x000000, 1);
+            selectedCircle.fillStyle(0x000000, 1);
+            selectedCircle.fillCircle(x + buttonSize / 2, y + i * (buttonSize + spacing) + buttonSize / 2, buttonSize / 4); // smaller circle
+            selectedCircle.strokeCircle(x + buttonSize / 2, y + i * (buttonSize + spacing) + buttonSize / 2, buttonSize / 4);
+
+            selectedCircle.setVisible(false);
+
+            // Make the radio button clickable
+            graphics.setInteractive({ hitArea: new Phaser.Geom.Circle(x + buttonSize / 2, y + i * (buttonSize + spacing) + buttonSize / 2, buttonSize / 2), hitAreaCallback: Phaser.Geom.Circle.Contains, useHandCursor: true })
+                .on('pointerdown', () => {
+                    if (selectedButton) {
+                        selectedButton.setVisible(false); // Hide the previously selected button
+                    }
+
+                    selectedCircle.setVisible(true); // Show the selected state for the current button
+                    selectedButton = selectedCircle;
+
+                    callback(state);
+                });
+
+            // Add label
+            const label = this.scene.add.text(x + buttonSize + 10, y + labelYNudge + i * (buttonSize + spacing), state, { font: '16px Arial', fill: '#000000' });
+
+            // Add components to the group
+            radioGroup.add(graphics);
+            radioGroup.add(selectedCircle);
+            radioGroup.add(label);
+
+            if (state === simConfig.stateOfMatter) {
+                graphics.emit('pointerdown');
+            }
+        }
+
+        return radioGroup;
+    }
+
+    createCheckbox(name, x, y, labelText, callback) {
+        const checkboxSize = 15;
+        const checkboxPadding = 10;
+        const textOffset = -83;
+
+        // Create a rectangle for the checkbox
+        const checkboxRect = this.scene.add.rectangle(x + checkboxSize, y, checkboxSize, checkboxSize, 0xffffff)
+            .setOrigin(0, 0.5)
+            .setStrokeStyle(1, 0x000000)
+            .setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => {
+                this.toggleCheckboxState(name); // Pass 'name' as an argument
+            });
+
+        // Create a smaller black box in the center (initially invisible)
+        const checkMarkSize = checkboxSize / 2 - 1; // Adjusted size
+        const checkMark = this.scene.add.rectangle(x + checkboxSize + checkboxSize / 2 - 0.5, y - 0.5, checkMarkSize, checkMarkSize, 0x000000) // Adjusted position
+            .setOrigin(0.5, 0.5)
+            .setVisible(false) // Set initial visibility to false
+            .setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => {
+                this.toggleCheckboxState(name); // Pass 'name' as an argument
+            });
+
+        // Create a text element for the label
+        const label = this.scene.add.text(x + checkboxSize + textOffset, y, labelText, { font: '12px Arial', fill: '#000000' })
+            .setOrigin(0, 0.5);
+
+        // Store the elements in the elements object
+        this.elements[name] = { checkboxRect, checkMark, label };
+        this.checkboxCallbacks[name] = callback;
+
+        return { checkboxRect, checkMark, label };
+    }
+
+    toggleCheckboxState(name) {
+        const { checkboxRect, checkMark } = this.elements[name];
+        const isChecked = !checkMark.visible;
+        checkMark.setVisible(isChecked);
+        this.checkboxCallbacks[name](isChecked); // Call the callback with the updated state
+    }
+}
+
+
+</script>
